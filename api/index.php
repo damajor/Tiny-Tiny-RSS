@@ -3,55 +3,61 @@
 
 	require_once "../config.php";
 
-	set_include_path(get_include_path() . PATH_SEPARATOR .
-		dirname(__FILE__) . PATH_SEPARATOR .
+	set_include_path(dirname(__FILE__) . PATH_SEPARATOR .
 		dirname(dirname(__FILE__)) . PATH_SEPARATOR .
-		dirname(dirname(__FILE__)) . "/include" );
-
-	function __autoload($class) {
-		$file = "classes/".strtolower(basename($class)).".php";
-		if (file_exists($file)) {
-			require $file;
-		}
-	}
-
-	require_once "db.php";
-	require_once "db-prefs.php";
-	require_once "functions.php";
+		dirname(dirname(__FILE__)) . "/include" . PATH_SEPARATOR .
+  		get_include_path());
 
 	chdir("..");
 
-	if (defined('ENABLE_GZIP_OUTPUT') && ENABLE_GZIP_OUTPUT) {
+	define('TTRSS_SESSION_NAME', 'ttrss_api_sid');
+	define('NO_SESSION_AUTOSTART', true);
+
+	require_once "autoload.php";
+	require_once "db.php";
+	require_once "db-prefs.php";
+	require_once "functions.php";
+	require_once "sessions.php";
+
+	ini_set("session.gc_maxlifetime", 86400);
+
+	define('AUTH_DISABLE_OTP', true);
+
+	if (defined('ENABLE_GZIP_OUTPUT') && ENABLE_GZIP_OUTPUT &&
+			function_exists("ob_gzhandler")) {
+
 		ob_start("ob_gzhandler");
+	} else {
+		ob_start();
 	}
-
-	$link = db_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
-
-	$session_expire = SESSION_EXPIRE_TIME; //seconds
-	$session_name = (!defined('TTRSS_SESSION_NAME')) ? "ttrss_sid_api" : TTRSS_SESSION_NAME . "_api";
-
-	session_name($session_name);
 
 	$input = file_get_contents("php://input");
 
-	// Override $_REQUEST with JSON-encoded data if available
-	if ($input) {
+	if (defined('_API_DEBUG_HTTP_ENABLED') && _API_DEBUG_HTTP_ENABLED) {
+		// Override $_REQUEST with JSON-encoded data if available
+		// fallback on HTTP parameters
+		if ($input) {
+			$input = json_decode($input, true);
+			if ($input) $_REQUEST = $input;
+		}
+	} else {
+		// Accept JSON only
 		$input = json_decode($input, true);
-
-		if ($input) $_REQUEST = $input;
+		$_REQUEST = $input;
 	}
 
 	if ($_REQUEST["sid"]) {
 		session_id($_REQUEST["sid"]);
+		@session_start();
+	} else if (defined('_API_DEBUG_HTTP_ENABLED')) {
+		@session_start();
 	}
 
-	session_start();
-
-	if (!init_connection($link)) return;
+	if (!init_plugins()) return;
 
 	$method = strtolower($_REQUEST["op"]);
 
-	$handler = new API($link, $_REQUEST);
+	$handler = new API($_REQUEST);
 
 	if ($handler->before($method)) {
 		if ($method && method_exists($handler, $method)) {
@@ -62,6 +68,7 @@
 		$handler->after();
 	}
 
-	db_close($link);
+	header("Api-Content-Length: " . ob_get_length());
 
+	ob_end_flush();
 ?>

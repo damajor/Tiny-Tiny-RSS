@@ -24,15 +24,6 @@ function updateFeedList(sort_key) {
 		} });
 }
 
-function updateInstanceList(sort_key) {
-	new Ajax.Request("backend.php", {
-		parameters: "?op=pref-instances&sort=" + param_escape(sort_key),
-		onComplete: function(transport) {
-			dijit.byId('instanceConfigTab').attr('content', transport.responseText);
-			selectTab("instanceConfig", true);
-			notify("");
-		} });
-}
 
 function updateUsersList(sort_key) {
 	try {
@@ -92,28 +83,34 @@ function addUser() {
 function editUser(id, event) {
 
 	try {
-		if (!event || !event.ctrlKey) {
-
-		notify_progress("Loading, please wait...");
-
-		selectTableRows('prefUserList', 'none');
-		selectTableRowById('UMRR-'+id, 'UMCHK-'+id, true);
-
-		var query = "?op=pref-users&method=edit&id=" +
+		var query = "backend.php?op=pref-users&method=edit&id=" +
 			param_escape(id);
 
-		new Ajax.Request("backend.php",	{
-			parameters: query,
-			onComplete: function(transport) {
-					infobox_callback2(transport);
-					document.forms['user_edit_form'].login.focus();
-				} });
+		if (dijit.byId("userEditDlg"))
+			dijit.byId("userEditDlg").destroyRecursive();
 
-		} else if (event.ctrlKey) {
-			var cb = $('UMCHK-' + id);
-			cb.checked = !cb.checked;
-			toggleSelectRow(cb);
-		}
+		dialog = new dijit.Dialog({
+			id: "userEditDlg",
+			title: __("User Editor"),
+			style: "width: 600px",
+			execute: function() {
+				if (this.validate()) {
+
+					notify_progress("Saving data...", true);
+
+					var query = dojo.formToQuery("user_edit_form");
+
+					new Ajax.Request("backend.php", {
+						parameters: query,
+						onComplete: function(transport) {
+							dialog.hide();
+							updateUsersList();
+						}});
+				}
+			},
+			href: query});
+
+		dialog.show();
 
 	} catch (e) {
 		exception_error("editUser", e);
@@ -136,9 +133,52 @@ function editFilter(id) {
 			id: "filterEditDlg",
 			title: __("Edit Filter"),
 			style: "width: 600px",
+			test: function() {
+				var query = "backend.php?" + dojo.formToQuery("filter_edit_form") + "&savemode=test";
+
+				if (dijit.byId("filterTestDlg"))
+					dijit.byId("filterTestDlg").destroyRecursive();
+
+				var test_dlg = new dijit.Dialog({
+					id: "filterTestDlg",
+					title: "Test Filter",
+					style: "width: 600px",
+					href: query});
+
+				test_dlg.show();
+			},
+			selectRules: function(select) {
+				$$("#filterDlg_Matches input[type=checkbox]").each(function(e) {
+					e.checked = select;
+					if (select)
+						e.parentNode.addClassName("Selected");
+					else
+						e.parentNode.removeClassName("Selected");
+				});
+			},
+			selectActions: function(select) {
+				$$("#filterDlg_Actions input[type=checkbox]").each(function(e) {
+					e.checked = select;
+
+					if (select)
+						e.parentNode.addClassName("Selected");
+					else
+						e.parentNode.removeClassName("Selected");
+
+				});
+			},
+			editRule: function(e) {
+				var li = e.parentNode;
+				var rule = li.getElementsByTagName("INPUT")[1].value;
+				addFilterRule(li, rule);
+			},
+			editAction: function(e) {
+				var li = e.parentNode;
+				var action = li.getElementsByTagName("INPUT")[1].value;
+				addFilterAction(li, action);
+			},
 			removeFilter: function() {
-				var title = this.attr('value').reg_exp;
-				var msg = __("Remove filter %s?").replace("%s", title);
+				var msg = __("Remove filter?");
 
 				if (confirm(msg)) {
 					this.hide();
@@ -157,57 +197,29 @@ function editFilter(id) {
 						} });
 				}
 			},
-			test: function() {
-				if (this.validate()) {
-
-					if (dijit.byId("filterTestDlg"))
-						dijit.byId("filterTestDlg").destroyRecursive();
-
-					tdialog = new dijit.Dialog({
-						id: "filterTestDlg",
-						title: __("Filter Test Results"),
-						style: "width: 600px",
-						href: "backend.php?savemode=test&" +
-							dojo.objectToQuery(dialog.attr('value')),
-						});
-
-					tdialog.show();
-
-				}
+			addAction: function() { addFilterAction(); },
+			addRule: function() { addFilterRule(); },
+			deleteAction: function() {
+				$$("#filterDlg_Actions li.[class*=Selected]").each(function(e) { e.parentNode.removeChild(e) });
+			},
+			deleteRule: function() {
+				$$("#filterDlg_Matches li.[class*=Selected]").each(function(e) { e.parentNode.removeChild(e) });
 			},
 			execute: function() {
 				if (this.validate()) {
 
-					var query = "?op=rpc&method=verifyRegexp&reg_exp=" +
-						param_escape(dialog.attr('value').reg_exp);
+					notify_progress("Saving data...", true);
 
-					notify_progress("Verifying regular expression...");
+					var query = dojo.formToQuery("filter_edit_form");
 
-					new Ajax.Request("backend.php",	{
+					console.log(query);
+
+					new Ajax.Request("backend.php", {
 						parameters: query,
 						onComplete: function(transport) {
-							var reply = JSON.parse(transport.responseText);
-
-							if (reply) {
-								notify('');
-
-								if (!reply['status']) {
-									alert("Match regular expression seems to be invalid.");
-									return;
-								} else {
-									notify_progress("Saving data...", true);
-
-									console.log(dojo.objectToQuery(dialog.attr('value')));
-
-									new Ajax.Request("backend.php", {
-										parameters: dojo.objectToQuery(dialog.attr('value')),
-										onComplete: function(transport) {
-											dialog.hide();
-											updateFilterList();
-									}});
-								}
-							}
-					}});
+							dialog.hide();
+							updateFilterList();
+						}});
 				}
 			},
 			href: query});
@@ -249,6 +261,19 @@ function getSelectedFeeds() {
 	return rv;
 }
 
+function getSelectedCategories() {
+	var tree = dijit.byId("feedTree");
+	var items = tree.model.getCheckedItems();
+	var rv = [];
+
+	items.each(function(item) {
+		if (item.id[0].match("CAT:"))
+			rv.push(tree.model.store.getValue(item, 'bare_id'));
+	});
+
+	return rv;
+}
+
 function getSelectedFilters() {
 	var tree = dijit.byId("filterTree");
 	var items = tree.model.getCheckedItems();
@@ -261,10 +286,6 @@ function getSelectedFilters() {
 	return rv;
 
 }
-
-/* function getSelectedFeedCats() {
-	return getSelectedTableRowIds("prefFeedCatList");
-} */
 
 function removeSelectedLabels() {
 
@@ -459,43 +480,6 @@ function purgeSelectedFeeds() {
 	return false;
 }
 
-function userEditCancel() {
-	closeInfoBox();
-	return false;
-}
-
-function userEditSave() {
-
-	try {
-
-		var login = document.forms["user_edit_form"].login.value;
-
-		if (login.length == 0) {
-			alert(__("Login field cannot be blank."));
-			return;
-		}
-
-		notify_progress("Saving user...");
-
-		closeInfoBox();
-
-		var query = Form.serialize("user_edit_form");
-
-		new Ajax.Request("backend.php", {
-			parameters: query,
-			onComplete: function(transport) {
-				updateUsersList();
-			} });
-
-	} catch (e) {
-		exception_error("userEditSave", e);
-	}
-
-	return false;
-
-}
-
-
 function editSelectedUser() {
 	var rows = getSelectedUsers();
 
@@ -543,7 +527,7 @@ function resetSelectedUserPass() {
 			new Ajax.Request("backend.php", {
 				parameters: query,
 				onComplete: function(transport) {
-					notify_info(transport.responseText);
+					notify_info(transport.responseText, true);
 				} });
 
 		}
@@ -569,17 +553,24 @@ function selectedUserDetails() {
 			return;
 		}
 
-		notify_progress("Loading, please wait...");
-
 		var id = rows[0];
 
-		var query = "?op=pref-users&method=userdetails&id=" + id;
+		var query = "backend.php?op=pref-users&method=userdetails&id=" + id;
 
-		new Ajax.Request("backend.php",	{
-			parameters: query,
-			onComplete: function(transport) {
-					infobox_callback2(transport);
-				} });
+		if (dijit.byId("userDetailsDlg"))
+			dijit.byId("userDetailsDlg").destroyRecursive();
+
+		dialog = new dijit.Dialog({
+			id: "userDetailsDlg",
+			title: __("User details"),
+			style: "width: 600px",
+			execute: function() {
+				dialog.hide();
+			},
+			href: query});
+
+		dialog.show();
+
 	} catch (e) {
 		exception_error("selectedUserDetails", e);
 	}
@@ -605,6 +596,31 @@ function editSelectedFilter() {
 
 }
 
+function joinSelectedFilters() {
+	var rows = getSelectedFilters();
+
+	if (rows.length == 0) {
+		alert(__("No filters are selected."));
+		return;
+	}
+
+	var ok = confirm(__("Combine selected filters?"));
+
+	if (ok) {
+		notify_progress("Joining filters...");
+
+		var query = "?op=pref-filters&method=join&ids="+
+			param_escape(rows.toString());
+
+		console.log(query);
+
+		new Ajax.Request("backend.php",	{
+			parameters: query,
+			onComplete: function(transport) {
+					updateFilterList();
+			} });
+	}
+}
 
 function editSelectedFeed() {
 	var rows = getSelectedFeeds();
@@ -681,11 +697,6 @@ function editSelectedFeeds() {
 
 							/* Form.serialize ignores unchecked checkboxes */
 
-							if (!query.match("&rtl_content=") &&
-									this.getChildByName('rtl_content').attr('disabled') == false) {
-								query = query + "&rtl_content=false";
-							}
-
 							if (!query.match("&private=") &&
 									this.getChildByName('private').attr('disabled') == false) {
 								query = query + "&private=false";
@@ -695,6 +706,13 @@ function editSelectedFeeds() {
 								if (!query.match("&cache_images=") &&
 										this.getChildByName('cache_images').attr('disabled') == false) {
 									query = query + "&cache_images=false";
+								}
+							} catch (e) { }
+
+							try {
+								if (!query.match("&hide_images=") &&
+										this.getChildByName('hide_images').attr('disabled') == false) {
+									query = query + "&hide_images=false";
 								}
 							} catch (e) { }
 
@@ -711,11 +729,6 @@ function editSelectedFeeds() {
 							if (!query.match("&mark_unread_on_update=") &&
 									this.getChildByName('mark_unread_on_update').attr('disabled') == false) {
 								query = query + "&mark_unread_on_update=false";
-							}
-
-							if (!query.match("&update_on_checksum_change=") &&
-									this.getChildByName('update_on_checksum_change').attr('disabled') == false) {
-								query = query + "&update_on_checksum_change=false";
 							}
 
 							console.log(query);
@@ -738,18 +751,6 @@ function editSelectedFeeds() {
 
 	} catch (e) {
 		exception_error("editSelectedFeeds", e);
-	}
-}
-
-function piggie(enable) {
-	if (enable) {
-		console.log("I LOVEDED IT!");
-		var piggie = $("piggie");
-
-		Element.show(piggie);
-		Position.Center(piggie);
-		Effect.Puff(piggie);
-
 	}
 }
 
@@ -806,26 +807,14 @@ function opmlImport() {
 	}
 }
 
-function importData() {
-
-	var file = $("export_file");
-
-	if (file.value.length == 0) {
-		alert(__("Please choose the file first."));
-		return false;
-	} else {
-		notify_progress("Importing, please wait...", true);
-
-		Element.show("data_upload_iframe");
-
-		return true;
-	}
-}
-
 
 function updateFilterList() {
+	var user_search = $("filter_search");
+	var search = "";
+	if (user_search) { search = user_search.value; }
+
 	new Ajax.Request("backend.php",	{
-		parameters: "?op=pref-filters",
+		parameters: "?op=pref-filters&search=" + param_escape(search),
 		onComplete: function(transport) {
 			dijit.byId('filterConfigTab').attr('content', transport.responseText);
 			notify("");
@@ -850,6 +839,15 @@ function updatePrefsList() {
 		} });
 }
 
+function updateSystemList() {
+	new Ajax.Request("backend.php", {
+		parameters: "?op=pref-system",
+		onComplete: function(transport) {
+			dijit.byId('systemConfigTab').attr('content', transport.responseText);
+			notify("");
+		} });
+}
+
 function selectTab(id, noupdate, method) {
 	try {
 		if (!noupdate) {
@@ -865,6 +863,8 @@ function selectTab(id, noupdate, method) {
 				updatePrefsList();
 			} else if (id == "userConfig") {
 				updateUsersList();
+			} else if (id == "systemConfig") {
+				updateSystemList();
 			}
 
 			var tab = dijit.byId(id + "Tab");
@@ -914,6 +914,31 @@ function init() {
 		dojo.registerModulePath("lib", "..");
 		dojo.registerModulePath("fox", "../../js/");
 
+		dojo.require("dijit.ColorPalette");
+		dojo.require("dijit.Dialog");
+		dojo.require("dijit.form.Button");
+		dojo.require("dijit.form.CheckBox");
+		dojo.require("dijit.form.DropDownButton");
+		dojo.require("dijit.form.FilteringSelect");
+		dojo.require("dijit.form.Form");
+		dojo.require("dijit.form.RadioButton");
+		dojo.require("dijit.form.Select");
+		dojo.require("dijit.form.SimpleTextarea");
+		dojo.require("dijit.form.TextBox");
+		dojo.require("dijit.form.ValidationTextBox");
+		dojo.require("dijit.InlineEditBox");
+		dojo.require("dijit.layout.AccordionContainer");
+		dojo.require("dijit.layout.BorderContainer");
+		dojo.require("dijit.layout.ContentPane");
+		dojo.require("dijit.layout.TabContainer");
+		dojo.require("dijit.Menu");
+		dojo.require("dijit.ProgressBar");
+		dojo.require("dijit.ProgressBar");
+		dojo.require("dijit.Toolbar");
+		dojo.require("dijit.Tree");
+		dojo.require("dijit.tree.dndSource");
+		dojo.require("dojo.data.ItemFileWriteStore");
+
 		dojo.require("lib.CheckBoxTree");
 		dojo.require("fox.PrefFeedTree");
 		dojo.require("fox.PrefFilterTree");
@@ -924,8 +949,11 @@ function init() {
 		dojo.addOnLoad(function() {
 			loading_set_progress(50);
 
+			var clientTzOffset = new Date().getTimezoneOffset() * 60;
+
 			new Ajax.Request("backend.php", {
-				parameters: {op: "rpc", method: "sanityCheck"},
+				parameters: {op: "rpc", method: "sanityCheck",
+				 	clientTzOffset: clientTzOffset },
 					onComplete: function(transport) {
 					backend_sanity_check_callback(transport);
 				} });
@@ -948,13 +976,8 @@ function validatePrefsReset() {
 			new Ajax.Request("backend.php", {
 				parameters: query,
 				onComplete: function(transport) {
-					var msg = transport.responseText;
-					if (msg.match("PREFS_THEME_CHANGED")) {
-						window.location.reload();
-					} else {
-						notify_info(msg);
-						selectTab();
-					}
+					updatePrefsList();
+					notify_info(transport.responseText);
 				} });
 
 		}
@@ -967,10 +990,10 @@ function validatePrefsReset() {
 
 }
 
-
 function pref_hotkey_handler(e) {
 	try {
-		if (e.target.nodeName == "INPUT") return;
+
+		if (e.target.nodeName == "INPUT" || e.target.nodeName == "TEXTAREA") return;
 
 		var keycode = false;
 		var shift_key = false;
@@ -992,226 +1015,147 @@ function pref_hotkey_handler(e) {
 		var keychar = String.fromCharCode(keycode);
 
 		if (keycode == 27) { // escape
-			if (Element.visible("hotkey_help_overlay")) {
-				Element.hide("hotkey_help_overlay");
-			}
 			hotkey_prefix = false;
-			closeInfoBox();
 		}
 
 		if (keycode == 16) return; // ignore lone shift
 		if (keycode == 17) return; // ignore lone ctrl
 
-		if ((keycode == 67 || keycode == 71) && !hotkey_prefix) {
-			hotkey_prefix = keycode;
+		if (!shift_key) keychar = keychar.toLowerCase();
+
+		var hotkeys = getInitParam("hotkeys");
+
+		if (!hotkey_prefix && hotkeys[0].indexOf(keychar) != -1) {
 
 			var date = new Date();
 			var ts = Math.round(date.getTime() / 1000);
 
+			hotkey_prefix = keychar;
 			hotkey_prefix_pressed = ts;
 
 			cmdline.innerHTML = keychar;
 			Element.show(cmdline);
 
-			console.log("KP: PREFIX=" + keycode + " CHAR=" + keychar);
-			return;
+			return true;
 		}
-
-		if (Element.visible("hotkey_help_overlay")) {
-			Element.hide("hotkey_help_overlay");
-		}
-
-		if (keycode == 13 || keycode == 27) {
-			seq = "";
-		} else {
-			seq = seq + "" + keycode;
-		}
-
-		/* Global hotkeys */
 
 		Element.hide(cmdline);
 
-		if (!hotkey_prefix) {
+		var hotkey = keychar.search(/[a-zA-Z0-9]/) != -1 ? keychar : "(" + keycode + ")";
+		hotkey = hotkey_prefix ? hotkey_prefix + " " + hotkey : hotkey;
+		hotkey_prefix = false;
 
-			if ((keycode == 191 || keychar == '?') && shift_key) { // ?
-				showHelp();
-				return false;
-			}
+		var hotkey_action = false;
+		var hotkeys = getInitParam("hotkeys");
 
-			if (keycode == 191 || keychar == '/') { // /
-				var search_boxes = new Array("label_search",
-					"feed_search", "filter_search", "user_search", "feed_browser_search");
-
-				for (var i = 0; i < search_boxes.length; i++) {
-					var elem = $(search_boxes[i]);
-					if (elem) {
-						$(search_boxes[i]).focus();
-						return false;
-					}
-				}
+		for (sequence in hotkeys[1]) {
+			if (sequence == hotkey) {
+				hotkey_action = hotkeys[1][sequence];
+				break;
 			}
 		}
 
-		/* Prefix c */
-
-		if (hotkey_prefix == 67) { // c
-			hotkey_prefix = false;
-
-			if (keycode == 70) { // f
-				quickAddFilter();
-				return false;
-			}
-
-			if (keycode == 83) { // s
-				quickAddFeed();
-				return false;
-			}
-
-			if (keycode == 85) { // u
-				// no-op
-			}
-
-			if (keycode == 67) { // c
-				editFeedCats();
-				return false;
-			}
-
-			if (keycode == 84 && shift_key) { // T
-				feedBrowser();
-				return false;
-			}
-
-		}
-
-		/* Prefix g */
-
-		if (hotkey_prefix == 71) { // g
-
-			hotkey_prefix = false;
-
-			if (keycode == 49 && $("genConfigTab")) { // 1
-				selectTab("genConfig");
-				return false;
-			}
-
-			if (keycode == 50 && $("feedConfigTab")) { // 2
-				selectTab("feedConfig");
-				return false;
-			}
-
-			if (keycode == 51 && $("filterConfigTab")) { // 4
-				selectTab("filterConfig");
-				return false;
-			}
-
-			if (keycode == 52 && $("labelConfigTab")) { // 5
-				selectTab("labelConfig");
-				return false;
-			}
-
-			if (keycode == 53 && $("userConfigTab")) { // 6
-				selectTab("userConfig");
-				return false;
-			}
-
-			if (keycode == 88) { // x
-				return gotoMain();
-			}
-
-		}
-
-		if ($("piggie")) {
-			if (seq.match("8073717369")) {
-				seq = "";
-				piggie(true);
-			} else {
-				piggie(false);
-			}
-		}
-
-		if (hotkey_prefix) {
-			console.log("KP: PREFIX=" + hotkey_prefix + " CODE=" + keycode + " CHAR=" + keychar);
-		} else {
-			console.log("KP: CODE=" + keycode + " CHAR=" + keychar);
+		switch (hotkey_action) {
+		case "feed_subscribe":
+			quickAddFeed();
+			return false;
+		case "create_label":
+			addLabel();
+			return false;
+		case "create_filter":
+			quickAddFilter();
+			return false;
+		case "help_dialog":
+			//helpDialog("prefs");
+			return false;
+		default:
+			console.log("unhandled action: " + hotkey_action + "; hotkey: " + hotkey);
 		}
 
 	} catch (e) {
-		exception_error("pref_hotkey_handler", e);
+		exception_error("hotkey_handler", e);
 	}
 }
 
-function editFeedCats() {
+function removeCategory(id, item) {
 	try {
-		var query = "backend.php?op=pref-feeds&method=editCats";
 
-		if (dijit.byId("feedCatEditDlg"))
-			dijit.byId("feedCatEditDlg").destroyRecursive();
+		var ok = confirm(__("Remove category %s? Any nested feeds would be placed into Uncategorized.").replace("%s", item.name));
 
-		dialog = new dijit.Dialog({
-			id: "feedCatEditDlg",
-			title: __("Feed Categories"),
-			style: "width: 600px",
-			getSelectedCategories: function() {
-				return getSelectedTableRowIds("prefFeedCatList");
-			},
-			removeSelected: function() {
-				var sel_rows = this.getSelectedCategories();
+		if (ok) {
+			var query = "?op=pref-feeds&method=removeCat&ids="+
+				param_escape(id);
 
-				if (sel_rows.length > 0) {
-					var ok = confirm(__("Remove selected categories?"));
+			notify_progress("Removing category...");
 
-					if (ok) {
-						notify_progress("Removing selected categories...", true);
-
-						var query = "?op=pref-feeds&method=editCats&action=remove&ids="+
-							param_escape(sel_rows.toString());
-
-						new Ajax.Request("backend.php",	{
-							parameters: query,
-							onComplete: function(transport) {
-								notify('');
-								dialog.attr('content', transport.responseText);
-								updateFeedList();
-							} });
-
-					}
-
-				} else {
-					alert(__("No categories are selected."));
-				}
-			},
-			addCategory: function() {
-				if (this.validate()) {
-					notify_progress("Creating category...");
-
-					var query = "?op=pref-feeds&method=editCats&action=add&cat=" +
-						param_escape(this.attr('value').newcat);
-
-					new Ajax.Request("backend.php",	{
-						parameters: query,
-						onComplete: function(transport) {
-							notify('');
-							dialog.attr('content', transport.responseText);
-							updateFeedList();
-						} });
-				}
-			},
-			execute: function() {
-				if (this.validate()) {
-				}
-			},
-			href: query});
-
-		dialog.show();
+			new Ajax.Request("backend.php",	{
+				parameters: query,
+				onComplete: function(transport) {
+					notify('');
+					updateFeedList();
+				} });
+			}
 
 	} catch (e) {
-		exception_error("editFeedCats", e);
+		exception_error("removeCategory", e);
+	}
+}
+
+function removeSelectedCategories() {
+
+	var sel_rows = getSelectedCategories();
+
+	if (sel_rows.length > 0) {
+
+		var ok = confirm(__("Remove selected categories?"));
+
+		if (ok) {
+			notify_progress("Removing selected categories...");
+
+			var query = "?op=pref-feeds&method=removeCat&ids="+
+				param_escape(sel_rows.toString());
+
+			new Ajax.Request("backend.php",	{
+				parameters: query,
+				onComplete: function(transport) {
+						updateFeedList();
+					} });
+
+		}
+	} else {
+		alert(__("No categories are selected."));
+	}
+
+	return false;
+}
+
+function createCategory() {
+	try {
+		var title = prompt(__("Category title:"));
+
+		if (title) {
+
+			notify_progress("Creating category...");
+
+			var query = "?op=pref-feeds&method=addCat&cat=" +
+				param_escape(title);
+
+			new Ajax.Request("backend.php",	{
+				parameters: query,
+				onComplete: function(transport) {
+					notify('');
+					updateFeedList();
+				} });
+		}
+
+	} catch (e) {
+		exception_error("createCategory", e);
 	}
 }
 
 function showInactiveFeeds() {
 	try {
-		var query = "backend.php?op=dlg&method=inactiveFeeds";
+		var query = "backend.php?op=pref-feeds&method=inactiveFeeds";
 
 		if (dijit.byId("inactiveFeedsDlg"))
 			dijit.byId("inactiveFeedsDlg").destroyRecursive();
@@ -1273,7 +1217,7 @@ function opmlRegenKey() {
 
 			notify_progress("Trying to change address...", true);
 
-			var query = "?op=rpc&method=regenOPMLKey";
+			var query = "?op=pref-feeds&method=regenOPMLKey";
 
 			new Ajax.Request("backend.php", {
 				parameters: query,
@@ -1452,7 +1396,7 @@ function editProfiles() {
 		if (dijit.byId("profileEditDlg"))
 			dijit.byId("profileEditDlg").destroyRecursive();
 
-		var query = "backend.php?op=dlg&method=editPrefProfiles";
+		var query = "backend.php?op=pref-prefs&method=editPrefProfiles";
 
 		dialog = new dijit.Dialog({
 			id: "profileEditDlg",
@@ -1573,7 +1517,7 @@ function clearFeedAccessKeys() {
 	if (ok) {
 		notify_progress("Clearing URLs...");
 
-		var query = "?op=rpc&method=clearKeys";
+		var query = "?op=pref-feeds&method=clearKeys";
 
 		new Ajax.Request("backend.php", {
 			parameters: query,
@@ -1585,24 +1529,23 @@ function clearFeedAccessKeys() {
 	return false;
 }
 
-function clearArticleAccessKeys() {
-
-	var ok = confirm(__("This will invalidate all previously shared article URLs. Continue?"));
-
-	if (ok) {
-		notify_progress("Clearing URLs...");
-
-		var query = "?op=rpc&method=clearArticleKeys";
+function resetFilterOrder() {
+	try {
+		notify_progress("Loading, please wait...");
 
 		new Ajax.Request("backend.php", {
-			parameters: query,
+			parameters: "?op=pref-filters&method=filtersortreset",
 			onComplete: function(transport) {
-				notify_info("Shared URLs cleared.");
+		  		updateFilterList();
 			} });
-	}
 
-	return false;
+
+	} catch (e) {
+		exception_error("resetFilterOrder");
+	}
 }
+
+
 function resetFeedOrder() {
 	try {
 		notify_progress("Loading, please wait...");
@@ -1731,31 +1674,10 @@ function editLabel(id, event) {
 	}
 }
 
-function clearTwitterCredentials() {
-	try {
-		var ok = confirm(__("This will clear your stored authentication information for Twitter. Continue?"));
-
-		if (ok) {
-			notify_progress("Clearing credentials...");
-
-			var query = "?op=pref-feeds&method=remtwitterinfo";
-
-			new Ajax.Request("backend.php", {
-				parameters: query,
-				onComplete: function(transport) {
-					notify_info("Twitter credentials have been cleared.");
-					updateFeedList();
-				} });
-		}
-
-	} catch (e) {
-		exception_error("clearTwitterCredentials", e);
-	}
-}
 
 function customizeCSS() {
 	try {
-		var query = "backend.php?op=dlg&method=customizeCSS";
+		var query = "backend.php?op=pref-prefs&method=customizeCSS";
 
 		if (dijit.byId("cssEditDlg"))
 			dijit.byId("cssEditDlg").destroyRecursive();
@@ -1791,294 +1713,19 @@ function insertSSLserial(value) {
 	}
 }
 
-function getSelectedInstances() {
-	return getSelectedTableRowIds("prefInstanceList");
-}
-
-function addInstance() {
-	try {
-		var query = "backend.php?op=dlg&method=addInstance";
-
-		if (dijit.byId("instanceAddDlg"))
-			dijit.byId("instanceAddDlg").destroyRecursive();
-
-		dialog = new dijit.Dialog({
-			id: "instanceAddDlg",
-			title: __("Link Instance"),
-			style: "width: 600px",
-			regenKey: function() {
-				new Ajax.Request("backend.php", {
-					parameters: "?op=rpc&method=genHash",
-					onComplete: function(transport) {
-						var reply = JSON.parse(transport.responseText);
-						if (reply)
-							dijit.byId('instance_add_key').attr('value', reply.hash);
-
-					} });
-			},
-			execute: function() {
-				if (this.validate()) {
-					console.warn(dojo.objectToQuery(this.attr('value')));
-
-					notify_progress('Saving data...', true);
-					new Ajax.Request("backend.php", {
-						parameters: dojo.objectToQuery(this.attr('value')),
-						onComplete: function(transport) {
-							dialog.hide();
-							notify('');
-							updateInstanceList();
-					} });
-				}
-			},
-			href: query,
-		});
-
-		dialog.show();
-
-	} catch (e) {
-		exception_error("addInstance", e);
-	}
-}
-
-function editInstance(id, event) {
-	try {
-		if (!event || !event.ctrlKey) {
-
-		selectTableRows('prefInstanceList', 'none');
-		selectTableRowById('LIRR-'+id, 'LICHK-'+id, true);
-
-		var query = "backend.php?op=pref-instances&method=edit&id=" +
-			param_escape(id);
-
-		if (dijit.byId("instanceEditDlg"))
-			dijit.byId("instanceEditDlg").destroyRecursive();
-
-		dialog = new dijit.Dialog({
-			id: "instanceEditDlg",
-			title: __("Edit Instance"),
-			style: "width: 600px",
-			regenKey: function() {
-				new Ajax.Request("backend.php", {
-					parameters: "?op=rpc&method=genHash",
-					onComplete: function(transport) {
-						var reply = JSON.parse(transport.responseText);
-						if (reply)
-							dijit.byId('instance_edit_key').attr('value', reply.hash);
-
-					} });
-			},
-			execute: function() {
-				if (this.validate()) {
-//					console.warn(dojo.objectToQuery(this.attr('value')));
-
-					notify_progress('Saving data...', true);
-					new Ajax.Request("backend.php", {
-						parameters: dojo.objectToQuery(this.attr('value')),
-						onComplete: function(transport) {
-							dialog.hide();
-							notify('');
-							updateInstanceList();
-					} });
-				}
-			},
-			href: query,
-		});
-
-		dialog.show();
-
-		} else if (event.ctrlKey) {
-			var cb = $('LICHK-' + id);
-			cb.checked = !cb.checked;
-			toggleSelectRow(cb);
-		}
-
-
-	} catch (e) {
-		exception_error("editInstance", e);
-	}
-}
-
-function removeSelectedInstances() {
-	try {
-		var sel_rows = getSelectedInstances();
-
-		if (sel_rows.length > 0) {
-
-			var ok = confirm(__("Remove selected instances?"));
-
-			if (ok) {
-				notify_progress("Removing selected instances...");
-
-				var query = "?op=pref-instances&method=remove&ids="+
-					param_escape(sel_rows.toString());
-
-				new Ajax.Request("backend.php", {
-					parameters: query,
-					onComplete: function(transport) {
-						notify('');
-						updateInstanceList();
-					} });
-			}
-
-		} else {
-			alert(__("No instances are selected."));
-		}
-
-	} catch (e) {
-		exception_error("removeInstance", e);
-	}
-}
-
-function editSelectedInstance() {
-	var rows = getSelectedInstances();
-
-	if (rows.length == 0) {
-		alert(__("No instances are selected."));
-		return;
-	}
-
-	if (rows.length > 1) {
-		alert(__("Please select only one instance."));
-		return;
-	}
-
-	notify("");
-
-	editInstance(rows[0]);
-}
-
-function showHelp() {
-	try {
-		new Ajax.Request("backend.php", {
-			parameters: "?op=backend&method=help&topic=prefs",
-			onComplete: function(transport) {
-				$("hotkey_help_overlay").innerHTML = transport.responseText;
-				Effect.Appear("hotkey_help_overlay", {duration : 0.3});
-			} });
-
-	} catch (e) {
-		exception_error("showHelp", e);
-	}
-}
-
-function exportData() {
-	try {
-
-		var query = "backend.php?op=dlg&method=exportData";
-
-		if (dijit.byId("dataExportDlg"))
-			dijit.byId("dataExportDlg").destroyRecursive();
-
-		var exported = 0;
-
-		dialog = new dijit.Dialog({
-			id: "dataExportDlg",
-			title: __("Export Data"),
-			style: "width: 600px",
-			prepare: function() {
-
-				notify_progress("Loading, please wait...");
-
-				new Ajax.Request("backend.php", {
-					parameters: "?op=rpc&method=exportrun&offset=" + exported,
-					onComplete: function(transport) {
-						try {
-							var rv = JSON.parse(transport.responseText);
-
-							if (rv && rv.exported != undefined) {
-								if (rv.exported > 0) {
-
-									exported += rv.exported;
-
-									$("export_status_message").innerHTML =
-										"<img src='images/indicator_tiny.gif'> " +
-										"Exported %d articles, please wait...".replace("%d",
-											exported);
-
-									setTimeout('dijit.byId("dataExportDlg").prepare()', 2000);
-
-								} else {
-
-									$("export_status_message").innerHTML =
-										__("Finished, exported %d articles. You can download the data <a class='visibleLink' href='%u'>here</a>.")
-										.replace("%d", exported)
-										.replace("%u", "backend.php?op=rpc&subop=exportget");
-
-									exported = 0;
-
-								}
-
-							} else {
-								$("export_status_message").innerHTML =
-									"Error occured, could not export data.";
-							}
-						} catch (e) {
-							exception_error("exportData", e, transport.responseText);
-						}
-
-						notify('');
-
-					} });
-
-			},
-			execute: function() {
-				if (this.validate()) {
-
-
-
-				}
-			},
-			href: query});
-
-		dialog.show();
-
-
-	} catch (e) {
-		exception_error("exportData", e);
-	}
-}
-
-function dataImportComplete(iframe) {
-	try {
-		if (!iframe.contentDocument.body.innerHTML) return false;
-
-		Element.hide(iframe);
-
-		notify('');
-
-		if (dijit.byId('dataImportDlg'))
-			dijit.byId('dataImportDlg').destroyRecursive();
-
-		var content = iframe.contentDocument.body.innerHTML;
-
-		dialog = new dijit.Dialog({
-			id: "dataImportDlg",
-			title: __("Data Import"),
-			style: "width: 600px",
-			onCancel: function() {
-
-			},
-			content: content});
-
-		dialog.show();
-
-	} catch (e) {
-		exception_error("dataImportComplete", e);
-	}
-}
-
 function gotoExportOpml(filename, settings) {
 	tmp = settings ? 1 : 0;
-	document.location.href = "opml.php?op=Export&filename=" + filename + "&settings=" + tmp;
+	document.location.href = "backend.php?op=opml&method=export&filename=" + filename + "&settings=" + tmp;
 }
 
 
 function batchSubscribe() {
 	try {
-		var query = "backend.php?op=dlg&method=batchSubscribe";
+		var query = "backend.php?op=pref-feeds&method=batchSubscribe";
 
-		if (dijit.byId("batchSubDlg"))
-			dijit.byId("batchSubDlg").destroyRecursive();
+		// overlapping widgets
+		if (dijit.byId("batchSubDlg")) dijit.byId("batchSubDlg").destroyRecursive();
+		if (dijit.byId("feedAddDlg"))	dijit.byId("feedAddDlg").destroyRecursive();
 
 		var dialog = new dijit.Dialog({
 			id: "batchSubDlg",
@@ -2093,7 +1740,9 @@ function batchSubscribe() {
 					new Ajax.Request("backend.php", {
 						parameters: dojo.objectToQuery(this.attr('value')),
 						onComplete: function(transport) {
-							this.hide();
+							notify("");
+							updateFeedList();
+							dialog.hide();
 						} });
 					}
 			},
@@ -2104,4 +1753,54 @@ function batchSubscribe() {
 		exception_error("batchSubscribe", e);
 	}
 }
+
+
+function toggleAdvancedPrefs() {
+	try {
+		notify_progress("Loading, please wait...");
+
+		new Ajax.Request("backend.php", {
+			parameters: "?op=pref-prefs&method=toggleadvanced",
+			onComplete: function(transport) {
+				updatePrefsList();
+			} });
+
+	} catch (e) {
+		exception_error("toggleAdvancedPrefs", e);
+	}
+}
+
+function clearPluginData(name) {
+	try {
+		if (confirm(__("Clear stored data for this plugin?"))) {
+			notify_progress("Loading, please wait...");
+
+			new Ajax.Request("backend.php", {
+				parameters: "?op=pref-prefs&method=clearplugindata&name=" + param_escape(name),
+				onComplete: function(transport) {
+					notify('');
+					updatePrefsList();
+				} });
+		}
+	} catch (e) {
+		exception_error("clearPluginData", e);
+	}
+}
+
+function clearSqlLog() {
+
+	if (confirm(__("Clear all messages in the error log?"))) {
+
+		notify_progress("Loading, please wait...");
+		var query = "?op=pref-system&method=clearLog";
+
+		new Ajax.Request("backend.php",	{
+			parameters: query,
+			onComplete: function(transport) {
+				updateSystemList();
+			} });
+
+	}
+}
+
 

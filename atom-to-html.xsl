@@ -9,7 +9,7 @@
 <html>
 	<head>
 		<title><xsl:value-of select="atom:title"/></title>
-		<link rel="stylesheet" type="text/css" href="utility.css"/>
+		<link rel="stylesheet" type="text/css" href="css/utility.css"/>
 		<script language="javascript" src="lib/xsl_mop-up.js"></script>
 	</head>
 
@@ -21,13 +21,10 @@
 
 		<div class="rss">
 
-		<img class="feedicon" src="images/feed-icon-64x64.png" alt="feed icon"/>
-
 		<h1><xsl:value-of select="atom:title"/></h1>
 
 		<p class="description">This feed has been exported from
 			<a target="_new" class="extlink" href="http://tt-rss.org">Tiny Tiny RSS</a>.
-		   You need a news reader software to subscribe to it.
 			It contains the following items:</p>
 
 		<xsl:for-each select="atom:entry">
@@ -41,7 +38,6 @@
 				<p><a href="{enclosure/@url}">Extra...</a></p>
 			</xsl:if>
 
-			<hr/>
 
 		</xsl:for-each>
 

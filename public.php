@@ -1,6 +1,6 @@
 <?php
-	set_include_path(get_include_path() . PATH_SEPARATOR . 
-		dirname(__FILE__) . "/include");
+	set_include_path(dirname(__FILE__) ."/include" . PATH_SEPARATOR .
+		get_include_path());
 
 	/* remove ill effects of magic quotes */
 
@@ -17,39 +17,35 @@
 		$_REQUEST = array_map('stripslashes_deep', $_REQUEST);
 	}
 
-	require_once "functions.php";
+	require_once "autoload.php";
 	require_once "sessions.php";
+	require_once "functions.php";
 	require_once "sanity_check.php";
 	require_once "config.php";
 	require_once "db.php";
 	require_once "db-prefs.php";
 
-	no_cache_incantation();
-
 	startup_gettext();
 
-	$script_started = getmicrotime();
+	$script_started = microtime(true);
 
-	$link = db_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+	if (!init_plugins()) return;
 
-	if (!init_connection($link)) return;
-
-	if (ENABLE_GZIP_OUTPUT) {
+	if (ENABLE_GZIP_OUTPUT && function_exists("ob_gzhandler")) {
 		ob_start("ob_gzhandler");
-	}
-
-	function __autoload($class) {
-		$file = "classes/".strtolower(basename($class)).".php";
-		if (file_exists($file)) {
-			require $file;
-		}
 	}
 
 	$method = $_REQUEST["op"];
 
-	$handler = new Public_Handler($link, $_REQUEST);
+	$override = PluginHost::getInstance()->lookup_handler("public", $method);
 
-	if ($handler->before($method)) {
+	if ($override) {
+		$handler = $override;
+	} else {
+		$handler = new Handler_Public($_REQUEST);
+	}
+
+	if (implements_interface($handler, "IHandler") && $handler->before($method)) {
 		if ($method && method_exists($handler, $method)) {
 			$handler->$method();
 		} else if (method_exists($handler, 'index')) {
@@ -60,8 +56,5 @@
 	}
 
 	header("Content-Type: text/plain");
-	print json_encode(array("error" => array("code" => 7)));
-
-	// We close the connection to database.
-	db_close($link);
+	print error_json(13);
 ?>

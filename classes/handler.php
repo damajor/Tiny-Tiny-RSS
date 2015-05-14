@@ -1,10 +1,10 @@
 <?php
-class Handler {
-	protected $link;
+class Handler implements IHandler {
+	protected $dbh;
 	protected $args;
 
-	function __construct($link, $args) {
-		$this->link = $link;
+	function __construct($args) {
+		$this->dbh = Db::get();
 		$this->args = $args;
 	}
 
@@ -12,12 +12,13 @@ class Handler {
 		return true;
 	}
 
-	function before() {
+	function before($method) {
 		return true;
 	}
 
 	function after() {
 		return true;
 	}
+
 }
 ?>

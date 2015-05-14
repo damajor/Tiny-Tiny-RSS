@@ -1,14 +1,11 @@
-var total_unread = 0;
 var global_unread = -1;
-var firsttime_update = true;
-var _active_feed_id = 0;
-var _active_feed_is_cat = false;
 var hotkey_prefix = false;
 var hotkey_prefix_pressed = false;
-var _force_scheduled_update = false;
-var last_scheduled_update = false;
-
+var hotkey_actions = {};
+var _widescreen_mode = false;
 var _rpc_seq = 0;
+var _active_feed_id = 0;
+var _active_feed_is_cat = false;
 
 function next_seq() {
 	_rpc_seq += 1;
@@ -25,7 +22,6 @@ function activeFeedIsCat() {
 
 function getActiveFeedId() {
 	try {
-		//console.log("gAFID: " + _active_feed_id);
 		return _active_feed_id;
 	} catch (e) {
 		exception_error("getActiveFeedId", e);
@@ -34,14 +30,18 @@ function getActiveFeedId() {
 
 function setActiveFeedId(id, is_cat) {
 	try {
-		_active_feed_id = id;
+		hash_set('f', id);
+		hash_set('c', is_cat ? 1 : 0);
 
-		if (is_cat != undefined) {
-			_active_feed_is_cat = is_cat;
-		}
+		_active_feed_id = id;
+		_active_feed_is_cat = is_cat;
+
+		$("headlines-frame").setAttribute("feed-id", id);
+		$("headlines-frame").setAttribute("is-cat", is_cat ? 1 : 0);
 
 		selectFeed(id, is_cat);
 
+		PluginHost.run(PluginHost.HOOK_FEED_SET_ACTIVE, _active_article_id);
 	} catch (e) {
 		exception_error("setActiveFeedId", e);
 	}
@@ -61,12 +61,12 @@ function updateFeedList() {
 		}
 
 		var store = new dojo.data.ItemFileWriteStore({
-         url: "backend.php?op=feeds"});
+         url: "backend.php?op=pref_feeds&method=getfeedtree&mode=2"});
 
 		var treeModel = new fox.FeedStoreModel({
 			store: store,
 			query: {
-				"type": "feed"
+				"type": getInitParam('enable_feed_cats') == 1 ? "category" : "feed"
 			},
 			rootId: "root",
 			rootLabel: "Feeds",
@@ -74,25 +74,7 @@ function updateFeedList() {
 		});
 
 		var tree = new fox.FeedTree({
-		persist: false,
 		model: treeModel,
-		onOpen: function (item, node) {
-			var id = String(item.id);
-			var cat_id = id.substr(id.indexOf(":")+1);
-
-			new Ajax.Request("backend.php",
-				{ parameters: "backend.php?op=feeds&method=collapse&cid=" +
-					param_escape(cat_id) + "&mode=0" } );
-	   },
-		onClose: function (item, node) {
-			var id = String(item.id);
-			var cat_id = id.substr(id.indexOf(":")+1);
-
-			new Ajax.Request("backend.php",
-				{ parameters: "backend.php?op=feeds&method=collapse&cid=" +
-					param_escape(cat_id) + "&mode=1" } );
-
-	   },
 		onClick: function (item, node) {
 			var id = String(item.id);
 			var is_cat = id.match("^CAT:");
@@ -124,8 +106,6 @@ function updateFeedList() {
 	   	dojo.disconnect(tmph);
 			Element.hide("feedlistLoading");
 
-			tree.collapseHiddenCats();
-
 			feedlist_init();
 
 //			var node = dijit.byId("feedTree")._itemNodesMap['FEED:-2'][0].domNode
@@ -135,6 +115,7 @@ function updateFeedList() {
 		});
 
 		tree.startup();
+
 
 	} catch (e) {
 		exception_error("updateFeedList", e);
@@ -156,7 +137,8 @@ function catchupAllFeeds() {
 		new Ajax.Request("backend.php", {
 			parameters: query_str,
 			onComplete: function(transport) {
-				feedlist_callback2(transport);
+				request_counters(true);
+				viewCurrentFeed();
 			} });
 
 		global_unread = 0;
@@ -165,6 +147,7 @@ function catchupAllFeeds() {
 }
 
 function viewCurrentFeed(method) {
+	console.log("viewCurrentFeed");
 
 	if (getActiveFeedId() != undefined) {
 		viewfeed(getActiveFeedId(), method, activeFeedIsCat());
@@ -173,55 +156,14 @@ function viewCurrentFeed(method) {
 }
 
 function timeout() {
-	if (getInitParam("bw_limit") == "1") return;
-
-	try {
-	   var date = new Date();
-      var ts = Math.round(date.getTime() / 1000);
-
-		if (ts - last_scheduled_update > 10 || _force_scheduled_update) {
-
-			//console.log("timeout()");
-
-			window.clearTimeout(counter_timeout_id);
-
-			var query_str = "?op=rpc&method=getAllCounters&seq=" + next_seq();
-
-			var omode;
-
-			if (firsttime_update && !navigator.userAgent.match("Opera")) {
-				firsttime_update = false;
-				omode = "T";
-			} else {
-				omode = "flc";
-			}
-
-			query_str = query_str + "&omode=" + omode;
-
-			if (!_force_scheduled_update)
-				query_str = query_str + "&last_article_id=" + getInitParam("last_article_id");
-
-			//console.log("[timeout]" + query_str);
-
-			new Ajax.Request("backend.php", {
-				parameters: query_str,
-				onComplete: function(transport) {
-						handle_rpc_json(transport, !_force_scheduled_update);
-						_force_scheduled_update = false;
-					} });
-
-			last_scheduled_update = ts;
-		}
-
-	} catch (e) {
-		exception_error("timeout", e);
+	if (getInitParam("bw_limit") != "1") {
+		request_counters();
+		setTimeout("timeout()", 60*1000);
 	}
-
-	setTimeout("timeout()", 3000);
 }
 
 function search() {
-	var query = "backend.php?op=dlg&method=search&param=" +
+	var query = "backend.php?op=feeds&method=search&param=" +
 		param_escape(getActiveFeedId() + ":" + activeFeedIsCat());
 
 	if (dijit.byId("searchDlg"))
@@ -247,7 +189,7 @@ function updateTitle() {
 	var tmp = "Tiny Tiny RSS";
 
 	if (global_unread > 0) {
-		tmp = tmp + " (" + global_unread + ")";
+		tmp = "(" + global_unread + ") " + tmp;
 	}
 
 	if (window.fluid) {
@@ -271,30 +213,343 @@ function genericSanityCheck() {
 	return true;
 }
 
+
 function init() {
 	try {
 		//dojo.registerModulePath("fox", "../../js/");
 
 		dojo.require("fox.FeedTree");
 
-		if (typeof themeBeforeLayout == 'function') {
-			themeBeforeLayout();
-		}
+		dojo.require("dijit.ColorPalette");
+		dojo.require("dijit.Dialog");
+		dojo.require("dijit.form.Button");
+		dojo.require("dijit.form.CheckBox");
+		dojo.require("dijit.form.DropDownButton");
+		dojo.require("dijit.form.FilteringSelect");
+		dojo.require("dijit.form.Form");
+		dojo.require("dijit.form.RadioButton");
+		dojo.require("dijit.form.Select");
+		dojo.require("dijit.form.SimpleTextarea");
+		dojo.require("dijit.form.TextBox");
+		dojo.require("dijit.form.ComboBox");
+		dojo.require("dijit.form.ValidationTextBox");
+		dojo.require("dijit.InlineEditBox");
+		dojo.require("dijit.layout.AccordionContainer");
+		dojo.require("dijit.layout.BorderContainer");
+		dojo.require("dijit.layout.ContentPane");
+		dojo.require("dijit.layout.TabContainer");
+		dojo.require("dijit.Menu");
+		dojo.require("dijit.ProgressBar");
+		dojo.require("dijit.ProgressBar");
+		dojo.require("dijit.Toolbar");
+		dojo.require("dijit.Tree");
+		dojo.require("dijit.tree.dndSource");
+		dojo.require("dojo.data.ItemFileWriteStore");
 
 		dojo.parser.parse();
 
 		if (!genericSanityCheck())
 			return false;
 
-		loading_set_progress(20);
+		loading_set_progress(30);
 
-		var hasAudio = !!((myAudioTag = document.createElement('audio')).canPlayType);
+		var a = document.createElement('audio');
+
+		var hasAudio = !!a.canPlayType;
+		var hasSandbox = "sandbox" in document.createElement("iframe");
+		var hasMp3 = !!(a.canPlayType && a.canPlayType('audio/mpeg;').replace(/no/, ''));
+		var clientTzOffset = new Date().getTimezoneOffset() * 60;
 
 		new Ajax.Request("backend.php",	{
-			parameters: {op: "rpc", method: "sanityCheck", hasAudio: hasAudio},
+			parameters: {op: "rpc", method: "sanityCheck", hasAudio: hasAudio,
+				hasMp3: hasMp3,
+			 	clientTzOffset: clientTzOffset,
+				hasSandbox: hasSandbox},
 			onComplete: function(transport) {
 					backend_sanity_check_callback(transport);
 				} });
+
+		hotkey_actions["next_feed"] = function() {
+				var rv = dijit.byId("feedTree").getNextFeed(
+						getActiveFeedId(), activeFeedIsCat());
+
+				if (rv) viewfeed(rv[0], '', rv[1], null, null, null, true);
+		};
+		hotkey_actions["prev_feed"] = function() {
+				var rv = dijit.byId("feedTree").getPreviousFeed(
+						getActiveFeedId(), activeFeedIsCat());
+
+				if (rv) viewfeed(rv[0], '', rv[1], null, null, null, true);
+		};
+		hotkey_actions["next_article"] = function() {
+				moveToPost('next');
+		};
+		hotkey_actions["prev_article"] = function() {
+				moveToPost('prev');
+		};
+		hotkey_actions["next_article_noscroll"] = function() {
+				moveToPost('next', true);
+		};
+		hotkey_actions["prev_article_noscroll"] = function() {
+				moveToPost('prev', true);
+		};
+		hotkey_actions["next_article_noexpand"] = function() {
+				moveToPost('next', true, true);
+		};
+		hotkey_actions["prev_article_noexpand"] = function() {
+				moveToPost('prev', true, true);
+		};
+		hotkey_actions["collapse_article"] = function() {
+				var id = getActiveArticleId();
+				var elem = $("CICD-"+id);
+
+				if (elem) {
+					if (elem.visible()) {
+						cdmCollapseArticle(null, id);
+					}
+					else {
+						cdmExpandArticle(id);
+					}
+				}
+		};
+		hotkey_actions["toggle_expand"] = function() {
+				var id = getActiveArticleId();
+				var elem = $("CICD-"+id);
+
+				if (elem) {
+					if (elem.visible()) {
+						cdmCollapseArticle(null, id, false);
+					}
+					else {
+						cdmExpandArticle(id);
+					}
+				}
+		};
+		hotkey_actions["search_dialog"] = function() {
+				search();
+		};
+		hotkey_actions["toggle_mark"] = function() {
+				selectionToggleMarked(undefined, false, true);
+		};
+		hotkey_actions["toggle_publ"] = function() {
+				selectionTogglePublished(undefined, false, true);
+		};
+		hotkey_actions["toggle_unread"] = function() {
+				selectionToggleUnread(undefined, false, true);
+		};
+		hotkey_actions["edit_tags"] = function() {
+				var id = getActiveArticleId();
+				if (id) {
+					editArticleTags(id);
+				};
+			}
+		hotkey_actions["dismiss_selected"] = function() {
+				dismissSelectedArticles();
+		};
+		hotkey_actions["dismiss_read"] = function() {
+				dismissReadArticles();
+		};
+		hotkey_actions["open_in_new_window"] = function() {
+				if (getActiveArticleId()) {
+					openArticleInNewWindow(getActiveArticleId());
+					return;
+				}
+		};
+		hotkey_actions["catchup_below"] = function() {
+				catchupRelativeToArticle(1);
+		};
+		hotkey_actions["catchup_above"] = function() {
+				catchupRelativeToArticle(0);
+		};
+		hotkey_actions["article_scroll_down"] = function() {
+				var ctr = $("content_insert") ? $("content_insert") : $("headlines-frame");
+
+				scrollArticle(40);
+		};
+		hotkey_actions["article_scroll_up"] = function() {
+				var ctr = $("content_insert") ? $("content_insert") : $("headlines-frame");
+
+				scrollArticle(-40);
+		};
+		hotkey_actions["close_article"] = function() {
+				if (isCdmMode()) {
+					if (!getInitParam("cdm_expanded")) {
+						cdmCollapseArticle(false, getActiveArticleId());
+					} else {
+						dismissArticle(getActiveArticleId());
+					}
+				} else {
+					closeArticlePanel();
+				}
+		};
+		hotkey_actions["email_article"] = function() {
+				if (typeof emailArticle != "undefined") {
+					emailArticle();
+				} else if (typeof mailtoArticle != "undefined") {
+					mailtoArticle();
+				} else {
+					alert(__("Please enable mail plugin first."));
+				}
+		};
+		hotkey_actions["select_all"] = function() {
+				selectArticles('all');
+		};
+		hotkey_actions["select_unread"] = function() {
+				selectArticles('unread');
+		};
+		hotkey_actions["select_marked"] = function() {
+				selectArticles('marked');
+		};
+		hotkey_actions["select_published"] = function() {
+				selectArticles('published');
+		};
+		hotkey_actions["select_invert"] = function() {
+				selectArticles('invert');
+		};
+		hotkey_actions["select_none"] = function() {
+				selectArticles('none');
+		};
+		hotkey_actions["feed_refresh"] = function() {
+				if (getActiveFeedId() != undefined) {
+					viewfeed(getActiveFeedId(), '', activeFeedIsCat());
+					return;
+				}
+		};
+		hotkey_actions["feed_unhide_read"] = function() {
+				toggleDispRead();
+		};
+		hotkey_actions["feed_subscribe"] = function() {
+				quickAddFeed();
+		};
+		hotkey_actions["feed_debug_update"] = function() {
+				window.open("backend.php?op=feeds&method=view&feed=" + getActiveFeedId() +
+					"&view_mode=adaptive&order_by=default&update=&m=ForceUpdate&cat=" +
+					activeFeedIsCat() + "&DevForceUpdate=1&debug=1&xdebug=1&csrf_token=" +
+					getInitParam("csrf_token"));
+		};
+		hotkey_actions["feed_edit"] = function() {
+				if (activeFeedIsCat())
+					alert(__("You can't edit this kind of feed."));
+				else
+					editFeed(getActiveFeedId());
+		};
+		hotkey_actions["feed_catchup"] = function() {
+				if (getActiveFeedId() != undefined) {
+					catchupCurrentFeed();
+					return;
+				}
+		};
+		hotkey_actions["feed_reverse"] = function() {
+				reverseHeadlineOrder();
+		};
+		hotkey_actions["catchup_all"] = function() {
+				catchupAllFeeds();
+		};
+		hotkey_actions["cat_toggle_collapse"] = function() {
+				if (activeFeedIsCat()) {
+					dijit.byId("feedTree").collapseCat(getActiveFeedId());
+					return;
+				}
+		};
+		hotkey_actions["goto_all"] = function() {
+				viewfeed(-4);
+		};
+		hotkey_actions["goto_fresh"] = function() {
+				viewfeed(-3);
+		};
+		hotkey_actions["goto_marked"] = function() {
+				viewfeed(-1);
+		};
+		hotkey_actions["goto_published"] = function() {
+				viewfeed(-2);
+		};
+		hotkey_actions["goto_tagcloud"] = function() {
+				displayDlg(__("Tag cloud"), "printTagCloud");
+		};
+		hotkey_actions["goto_prefs"] = function() {
+				gotoPreferences();
+		};
+		hotkey_actions["select_article_cursor"] = function() {
+				var id = getArticleUnderPointer();
+				if (id) {
+					var row = $("RROW-" + id);
+
+					if (row) {
+						var cb = dijit.getEnclosingWidget(
+							row.getElementsByClassName("rchk")[0]);
+
+						if (cb) {
+							cb.attr("checked", !cb.attr("checked"));
+							toggleSelectRowById(cb, "RROW-" + id);
+							return false;
+						}
+					}
+				}
+		};
+		hotkey_actions["create_label"] = function() {
+				addLabel();
+		};
+		hotkey_actions["create_filter"] = function() {
+				quickAddFilter();
+		};
+		hotkey_actions["collapse_sidebar"] = function() {
+				collapse_feedlist();
+		};
+		hotkey_actions["toggle_embed_original"] = function() {
+				if (typeof embedOriginalArticle != "undefined") {
+					if (getActiveArticleId())
+						embedOriginalArticle(getActiveArticleId());
+				} else {
+					alert(__("Please enable embed_original plugin first."));
+				}
+		};
+		hotkey_actions["toggle_widescreen"] = function() {
+				if (!isCdmMode()) {
+					_widescreen_mode = !_widescreen_mode;
+
+					// reset stored sizes because geometry changed
+					setCookie("ttrss_ci_width", 0);
+					setCookie("ttrss_ci_height", 0);
+
+					switchPanelMode(_widescreen_mode);
+				} else {
+					alert(__("Widescreen is not available in combined mode."));
+				}
+		};
+		hotkey_actions["help_dialog"] = function() {
+				helpDialog("main");
+		};
+		hotkey_actions["toggle_combined_mode"] = function() {
+				notify_progress("Loading, please wait...");
+
+				var value = isCdmMode() ? "false" : "true";
+				var query = "?op=rpc&method=setpref&key=COMBINED_DISPLAY_MODE&value=" + value;
+
+				new Ajax.Request("backend.php",	{
+					parameters: query,
+					onComplete: function(transport) {
+						setInitParam("combined_display_mode",
+								!getInitParam("combined_display_mode"));
+
+						closeArticlePanel();
+						viewCurrentFeed();
+
+								} });
+		};
+		hotkey_actions["toggle_cdm_expanded"] = function() {
+				notify_progress("Loading, please wait...");
+
+				var value = getInitParam("cdm_expanded") ? "false" : "true";
+				var query = "?op=rpc&method=setpref&key=CDM_EXPANDED&value=" + value;
+
+				new Ajax.Request("backend.php",	{
+					parameters: query,
+					onComplete: function(transport) {
+						setInitParam("cdm_expanded", !getInitParam("cdm_expanded"));
+						viewCurrentFeed();
+					} });
+		};
+
 
 	} catch (e) {
 		exception_error("init", e);
@@ -308,9 +563,27 @@ function init_second_stage() {
 			updateFeedList();
 			closeArticlePanel();
 
-			if (typeof themeAfterLayout == 'function') {
-				themeAfterLayout();
+			if (parseInt(getCookie("ttrss_fh_width")) > 0) {
+				dijit.byId("feeds-holder").domNode.setStyle(
+					{width: getCookie("ttrss_fh_width") + "px" });
 			}
+
+			dijit.byId("main").resize();
+
+			var tmph = dojo.connect(dijit.byId('feeds-holder'), 'resize',
+				function (args) {
+					if (args && args.w >= 0) {
+						setCookie("ttrss_fh_width", args.w, getInitParam("cookie_lifetime"));
+					}
+			});
+
+			var tmph = dojo.connect(dijit.byId('content-insert'), 'resize',
+				function (args) {
+					if (args && args.w >= 0 && args.h >= 0) {
+						setCookie("ttrss_ci_width", args.w, getInitParam("cookie_lifetime"));
+						setCookie("ttrss_ci_height", args.h, getInitParam("cookie_lifetime"));
+					}
+			});
 
 		});
 
@@ -326,13 +599,39 @@ function init_second_stage() {
 
 		feeds_sort_by_unread = getInitParam("feeds_sort_by_unread") == 1;
 
-		loading_set_progress(30);
+		var hash_feed_id = hash_get('f');
+		var hash_feed_is_cat = hash_get('c') == "1";
+
+		if (hash_feed_id != undefined) {
+			setActiveFeedId(hash_feed_id, hash_feed_is_cat);
+		}
+
+		loading_set_progress(50);
 
 		// can't use cache_clear() here because viewfeed might not have initialized yet
 		if ('sessionStorage' in window && window['sessionStorage'] !== null)
 			sessionStorage.clear();
 
+		var hotkeys = getInitParam("hotkeys");
+		var tmp = [];
+
+		for (sequence in hotkeys[1]) {
+			filtered = sequence.replace(/\|.*$/, "");
+			tmp[filtered] = hotkeys[1][sequence];
+		}
+
+		hotkeys[1] = tmp;
+		setInitParam("hotkeys", hotkeys);
+
+		_widescreen_mode = getInitParam("widescreen");
+		switchPanelMode(_widescreen_mode);
+
 		console.log("second stage ok");
+
+		if (getInitParam("simple_update")) {
+			console.log("scheduling simple feed updater...");
+			window.setTimeout("update_random_feed()", 30*1000);
+		}
 
 	} catch (e) {
 		exception_error("init_second_stage", e);
@@ -341,42 +640,35 @@ function init_second_stage() {
 
 function quickMenuGo(opid) {
 	try {
-		if (opid == "qmcPrefs") {
+		switch (opid) {
+		case "qmcPrefs":
 			gotoPreferences();
-		}
-
-		if (opid == "qmcTagCloud") {
-			displayDlg("printTagCloud");
-		}
-
-		if (opid == "qmcTagSelect") {
-			displayDlg("printTagSelect");
-		}
-
-		if (opid == "qmcSearch") {
+			break;
+		case "qmcLogout":
+			gotoLogout();
+			break;
+		case "qmcTagCloud":
+			displayDlg(__("Tag cloud"), "printTagCloud");
+			break;
+		case "qmcTagSelect":
+			displayDlg(__("Select item(s) by tags"), "printTagSelect");
+			break;
+		case "qmcSearch":
 			search();
-			return;
-		}
-
-		if (opid == "qmcAddFeed") {
+			break;
+		case "qmcAddFeed":
 			quickAddFeed();
-			return;
-		}
-
-		if (opid == "qmcDigest") {
-			window.location.href = "digest.php";
-			return;
-		}
-
-		if (opid == "qmcEditFeed") {
+			break;
+		case "qmcDigest":
+			window.location.href = "backend.php?op=digest";
+			break;
+		case "qmcEditFeed":
 			if (activeFeedIsCat())
 				alert(__("You can't edit this kind of feed."));
 			else
 				editFeed(getActiveFeedId());
-			return;
-		}
-
-		if (opid == "qmcRemoveFeed") {
+			break;
+		case "qmcRemoveFeed":
 			var actid = getActiveFeedId();
 
 			if (activeFeedIsCat()) {
@@ -396,42 +688,40 @@ function quickMenuGo(opid) {
 			if (confirm(pr)) {
 				unsubscribeFeed(actid);
 			}
-
-			return;
-		}
-
-		if (opid == "qmcCatchupAll") {
+			break;
+		case "qmcCatchupAll":
 			catchupAllFeeds();
-			return;
-		}
-
-		if (opid == "qmcShowOnlyUnread") {
+			break;
+		case "qmcShowOnlyUnread":
 			toggleDispRead();
-			return;
-		}
-
-		if (opid == "qmcAddFilter") {
+			break;
+		case "qmcAddFilter":
 			quickAddFilter();
-			return;
-		}
-
-		if (opid == "qmcAddLabel") {
+			break;
+		case "qmcAddLabel":
 			addLabel();
-			return;
-		}
-
-		if (opid == "qmcRescoreFeed") {
+			break;
+		case "qmcRescoreFeed":
 			rescoreCurrentFeed();
-			return;
-		}
+			break;
+		case "qmcToggleWidescreen":
+			if (!isCdmMode()) {
+				_widescreen_mode = !_widescreen_mode;
 
-		if (opid == "qmcHKhelp") {
-			new Ajax.Request("backend.php", {
-				parameters: "?op=backend&method=help&topic=main",
-				onComplete: function(transport) {
-					$("hotkey_help_overlay").innerHTML = transport.responseText;
-					Effect.Appear("hotkey_help_overlay", {duration : 0.3});
-				} });
+				// reset stored sizes because geometry changed
+				setCookie("ttrss_ci_width", 0);
+				setCookie("ttrss_ci_height", 0);
+
+				switchPanelMode(_widescreen_mode);
+			} else {
+				alert(__("Widescreen is not available in combined mode."));
+			}
+			break;
+		case "qmcHKhelp":
+			helpDialog("main");
+			break;
+		default:
+			console.log("quickMenuGo: unknown action: " + opid);
 		}
 
 	} catch (e) {
@@ -470,21 +760,25 @@ function parse_runtime_info(data) {
 
 //		console.log("RI: " + k + " => " + v);
 
-		if (k == "new_version_available") {
-			var icon = $("newVersionIcon");
-			if (icon) {
-				if (v == "1") {
-					icon.style.display = "inline";
-				} else {
-					icon.style.display = "none";
-				}
+		if (k == "dep_ts" && parseInt(getInitParam("dep_ts")) > 0) {
+			if (parseInt(getInitParam("dep_ts")) < parseInt(v) && getInitParam("reload_on_ts_change")) {
+				window.location.reload();
 			}
-			return;
 		}
 
 		if (k == "daemon_is_running" && v != 1) {
 			notify_error("<span onclick=\"javascript:explainError(1)\">Update daemon is not running.</span>", true);
 			return;
+		}
+
+		if (k == "update_result") {
+			var updatesIcon = dijit.byId("updatesIcon").domNode;
+
+			if (v) {
+				Element.show(updatesIcon);
+			} else {
+				Element.hide(updatesIcon);
+			}
 		}
 
 		if (k == "daemon_stamp_ok" && v != 1) {
@@ -502,34 +796,8 @@ function parse_runtime_info(data) {
 		init_params[k] = v;
 		notify('');
 	}
-}
 
-function catchupCurrentFeed() {
-
-	var fn = getFeedName(getActiveFeedId(), activeFeedIsCat());
-
-	var str = __("Mark all articles in %s as read?").replace("%s", fn);
-
-	if (getInitParam("confirm_feed_catchup") != 1 || confirm(str)) {
-		return viewCurrentFeed('MarkAllRead');
-	}
-}
-
-function catchupFeedInGroup(id) {
-
-	try {
-
-		var title = getFeedName(id);
-
-		var str = __("Mark all articles in %s as read?").replace("%s", title);
-
-		if (getInitParam("confirm_feed_catchup") != 1 || confirm(str)) {
-			return viewCurrentFeed('MarkAllReadGR:' + id);
-		}
-
-	} catch (e) {
-		exception_error("catchupFeedInGroup", e);
-	}
+	PluginHost.run(PluginHost.HOOK_RUNTIME_INFO_LOADED, data);
 }
 
 function collapse_feedlist() {
@@ -537,18 +805,13 @@ function collapse_feedlist() {
 
 		if (!Element.visible('feeds-holder')) {
 			Element.show('feeds-holder');
-			Element.show('feeds-holder_splitter');
 			$("collapse_feeds_btn").innerHTML = "&lt;&lt;";
 		} else {
 			Element.hide('feeds-holder');
-			Element.hide('feeds-holder_splitter');
 			$("collapse_feeds_btn").innerHTML = "&gt;&gt;";
 		}
 
 		dijit.byId("main").resize();
-
-		query = "?op=rpc&method=setpref&key=_COLLAPSED_FEEDLIST&value=true";
-		new Ajax.Request("backend.php", { parameters: query });
 
 	} catch (e) {
 		exception_error("collapse_feedlist", e);
@@ -556,32 +819,9 @@ function collapse_feedlist() {
 }
 
 function viewModeChanged() {
+	cache_clear();
 	return viewCurrentFeed('');
 }
-
-function viewLimitChanged() {
-	return viewCurrentFeed('');
-}
-
-/* function adjustArticleScore(id, score) {
-	try {
-
-		var pr = prompt(__("Assign score to article:"), score);
-
-		if (pr != undefined) {
-			var query = "?op=rpc&method=setScore&id=" + id + "&score=" + pr;
-
-			new Ajax.Request("backend.php",	{
-			parameters: query,
-			onComplete: function(transport) {
-					viewCurrentFeed();
-				} });
-
-		}
-	} catch (e) {
-		exception_error("adjustArticleScore", e);
-	}
-} */
 
 function rescoreCurrentFeed() {
 
@@ -620,14 +860,16 @@ function hotkey_handler(e) {
 
 		var keycode = false;
 		var shift_key = false;
+		var ctrl_key = false;
+		var alt_key = false;
+		var meta_key = false;
 
 		var cmdline = $('cmdline');
 
-		try {
-			shift_key = e.shiftKey;
-		} catch (e) {
-
-		}
+		shift_key = e.shiftKey;
+		ctrl_key = e.ctrlKey;
+		alt_key = e.altKey;
+		meta_key = e.metaKey;
 
 		if (window.event) {
 			keycode = window.event.keyCode;
@@ -638,373 +880,59 @@ function hotkey_handler(e) {
 		var keychar = String.fromCharCode(keycode);
 
 		if (keycode == 27) { // escape
-			if (Element.visible("hotkey_help_overlay")) {
-				Element.hide("hotkey_help_overlay");
-			}
 			hotkey_prefix = false;
 		}
 
 		if (keycode == 16) return; // ignore lone shift
 		if (keycode == 17) return; // ignore lone ctrl
 
-		if ((keycode == 70 || keycode == 67 || keycode == 71 || keycode == 65)
-				&& !hotkey_prefix) {
+		keychar = keychar.toLowerCase();
+
+		var hotkeys = getInitParam("hotkeys");
+
+		if (!hotkey_prefix && hotkeys[0].indexOf(keychar) != -1) {
 
 			var date = new Date();
 			var ts = Math.round(date.getTime() / 1000);
 
-			hotkey_prefix = keycode;
+			hotkey_prefix = keychar;
 			hotkey_prefix_pressed = ts;
 
 			cmdline.innerHTML = keychar;
 			Element.show(cmdline);
 
-			console.log("KP: PREFIX=" + keycode + " CHAR=" + keychar + " TS=" + ts);
 			return true;
 		}
 
-		if (Element.visible("hotkey_help_overlay")) {
-			Element.hide("hotkey_help_overlay");
-		}
-
-		/* Global hotkeys */
-
 		Element.hide(cmdline);
 
-		if (!hotkey_prefix) {
+		var hotkey = keychar.search(/[a-zA-Z0-9]/) != -1 ? keychar : "(" + keycode + ")";
 
-			if (keycode == 27) { // escape
-				closeArticlePanel();
-				return;
-			}
+		// ensure ^*char notation
+		if (shift_key) hotkey = "*" + hotkey;
+		if (ctrl_key) hotkey = "^" + hotkey;
+		if (alt_key) hotkey = "+" + hotkey;
+		if (meta_key) hotkey = "%" + hotkey;
 
-			if (keycode == 69) { // e
-				var id = getActiveArticleId();
-				emailArticle(id);
-			}
+		hotkey = hotkey_prefix ? hotkey_prefix + " " + hotkey : hotkey;
+		hotkey_prefix = false;
 
-			if ((keycode == 191 || keychar == '?') && shift_key) { // ?
+		var hotkey_action = false;
+		var hotkeys = getInitParam("hotkeys");
 
-				new Ajax.Request("backend.php", {
-					parameters: "?op=backend&method=help&topic=main",
-					onComplete: function(transport) {
-						$("hotkey_help_overlay").innerHTML = transport.responseText;
-						Effect.Appear("hotkey_help_overlay", {duration : 0.3});
-					} });
-				return false;
-			}
-
-			if (keycode == 191 || keychar == '/') { // /
-				search();
-				return false;
-			}
-
-			if (keycode == 74 && !shift_key) { // j
-				var rv = dijit.byId("feedTree").getPreviousFeed(
-						getActiveFeedId(), activeFeedIsCat());
-
-				if (rv) viewfeed(rv[0], '', rv[1]);
-
-				return;
-			}
-
-			if (keycode == 75) { // k
-				var rv = dijit.byId("feedTree").getNextFeed(
-						getActiveFeedId(), activeFeedIsCat());
-
-				if (rv) viewfeed(rv[0], '', rv[1]);
-
-				return;
-			}
-
-			if (shift_key && keycode == 40) { // shift-down
-				catchupRelativeToArticle(1);
-				return;
-			}
-
-			if (shift_key && keycode == 38) { // shift-up
-				catchupRelativeToArticle(0);
-				return;
-			}
-
-			if (shift_key && keycode == 78) { // N
-				scrollArticle(50);
-				return;
-			}
-
-			if (shift_key && keycode == 80) { // P
-				scrollArticle(-50);
-				return;
-			}
-
-			if (keycode == 68 && shift_key) { // shift-D
-				dismissSelectedArticles();
-				return;
-			}
-
-			if (keycode == 88 && shift_key) { // shift-X
-				dismissReadArticles();
-				return;
-			}
-
-			if (keycode == 78 || keycode == 40) { // n, down
-				if (typeof moveToPost != 'undefined') {
-					moveToPost('next');
-					return false;
-				}
-			}
-
-			if (keycode == 80 || keycode == 38) { // p, up
-				if (typeof moveToPost != 'undefined') {
-					moveToPost('prev');
-					return false;
-				}
-			}
-
-			if (keycode == 83 && shift_key) { // S
-				selectionTogglePublished(undefined, false, true);
-				return;
-			}
-
-			if (keycode == 83) { // s
-				selectionToggleMarked(undefined, false, true);
-				return;
-			}
-
-			if (keycode == 85) { // u
-				selectionToggleUnread(undefined, false, true);
-				return;
-			}
-
-			if (keycode == 84 && shift_key) { // T
-				var id = getActiveArticleId();
-				if (id) {
-					editArticleTags(id, getActiveFeedId(), isCdmMode());
-					return;
-				}
-			}
-
-			if (keycode == 9) { // tab
-				var id = getArticleUnderPointer();
-				if (id) {
-					var cb = $("RCHK-" + id);
-
-					if (cb) {
-						cb.checked = !cb.checked;
-						toggleSelectRowById(cb, "RROW-" + id);
-						return false;
-					}
-				}
-			}
-
-			if (keycode == 79) { // o
-				if (getActiveArticleId()) {
-					openArticleInNewWindow(getActiveArticleId());
-					return;
-				}
-			}
-
-			if (keycode == 81 && shift_key) { // Q
-				if (typeof catchupAllFeeds != 'undefined') {
-					catchupAllFeeds();
-					return;
-				}
-			}
-
-			if (keycode == 88 && !shift_key) { // x
-				if (activeFeedIsCat()) {
-					dijit.byId("feedTree").collapseCat(getActiveFeedId());
-					return;
-				}
+		for (sequence in hotkeys[1]) {
+			if (sequence == hotkey) {
+				hotkey_action = hotkeys[1][sequence];
+				break;
 			}
 		}
 
-		/* Prefix a */
+		var action = hotkey_actions[hotkey_action];
 
-		if (hotkey_prefix == 65) { // a
-			hotkey_prefix = false;
-
-			if (keycode == 65) { // a
-				selectArticles('all');
-				return;
-			}
-
-			if (keycode == 85) { // u
-				selectArticles('unread');
-				return;
-			}
-
-			if (keycode == 73) { // i
-				selectArticles('invert');
-				return;
-			}
-
-			if (keycode == 78) { // n
-				selectArticles('none');
-				return;
-			}
-
+		if (action != null) {
+			action();
+			return false;
 		}
-
-		/* Prefix f */
-
-		if (hotkey_prefix == 70) { // f
-
-			hotkey_prefix = false;
-
-			if (keycode == 81) { // q
-				if (getActiveFeedId()) {
-					catchupCurrentFeed();
-					return;
-				}
-			}
-
-			if (keycode == 82) { // r
-				if (getActiveFeedId()) {
-					viewfeed(getActiveFeedId(), '', activeFeedIsCat());
-					return;
-				}
-			}
-
-			if (keycode == 65) { // a
-				toggleDispRead();
-				return false;
-			}
-
-			if (keycode == 85) { // u
-				if (getActiveFeedId()) {
-					viewfeed(getActiveFeedId(), '');
-					return false;
-				}
-			}
-
-			if (keycode == 69) { // e
-
-				if (activeFeedIsCat())
-					alert(__("You can't edit this kind of feed."));
-				else
-					editFeed(getActiveFeedId());
-				return;
-
-				return false;
-			}
-
-			if (keycode == 83) { // s
-				quickAddFeed();
-				return false;
-			}
-
-			if (keycode == 67 && shift_key) { // C
-				if (typeof catchupAllFeeds != 'undefined') {
-					catchupAllFeeds();
-					return false;
-				}
-			}
-
-			if (keycode == 67) { // c
-				if (getActiveFeedId()) {
-					catchupCurrentFeed();
-					return false;
-				}
-			}
-
-			if (keycode == 88) { // x
-				reverseHeadlineOrder();
-				return;
-			}
-		}
-
-		/* Prefix c */
-
-		if (hotkey_prefix == 67) { // c
-			hotkey_prefix = false;
-
-			if (keycode == 70) { // f
-				quickAddFilter();
-				return false;
-			}
-
-			if (keycode == 76) { // l
-				addLabel();
-				return false;
-			}
-
-			if (keycode == 83) { // s
-				if (typeof collapse_feedlist != 'undefined') {
-					collapse_feedlist();
-					return false;
-				}
-			}
-
-			if (keycode == 77) { // m
-				// TODO: sortable feedlist
-				return;
-			}
-
-			if (keycode == 78) { // n
-				catchupRelativeToArticle(1);
-				return;
-			}
-
-			if (keycode == 80) { // p
-				catchupRelativeToArticle(0);
-				return;
-			}
-
-
-		}
-
-		/* Prefix g */
-
-		if (hotkey_prefix == 71) { // g
-
-			hotkey_prefix = false;
-
-
-			if (keycode == 65) { // a
-				viewfeed(-4);
-				return false;
-			}
-
-			if (keycode == 83) { // s
-				viewfeed(-1);
-				return false;
-			}
-
-			if (keycode == 80 && shift_key) { // P
-				gotoPreferences();
-				return false;
-			}
-
-			if (keycode == 80) { // p
-				viewfeed(-2);
-				return false;
-			}
-
-			if (keycode == 70) { // f
-				viewfeed(-3);
-				return false;
-			}
-
-			if (keycode == 84) { // t
-				displayDlg("printTagCloud");
-				return false;
-			}
-		}
-
-		/* Cmd */
-
-		if (hotkey_prefix == 224 || hotkey_prefix == 91) { // f
-			hotkey_prefix = false;
-			return;
-		}
-
-		if (hotkey_prefix) {
-			console.log("KP: PREFIX=" + hotkey_prefix + " CODE=" + keycode + " CHAR=" + keychar);
-		} else {
-			console.log("KP: CODE=" + keycode + " CHAR=" + keychar);
-		}
-
 
 	} catch (e) {
 		exception_error("hotkey_handler", e);
@@ -1018,82 +946,42 @@ function inPreferences() {
 function reverseHeadlineOrder() {
 	try {
 
-		var query_str = "?op=rpc&method=togglepref&key=REVERSE_HEADLINES";
+		/* var query_str = "?op=rpc&method=togglepref&key=REVERSE_HEADLINES";
 
 		new Ajax.Request("backend.php", {
 			parameters: query_str,
 			onComplete: function(transport) {
 					viewCurrentFeed();
-				} });
+				} }); */
+
+		var toolbar = document.forms["main_toolbar_form"];
+		var order_by = dijit.getEnclosingWidget(toolbar.order_by);
+
+		var value = order_by.attr('value');
+
+		if (value == "date_reverse")
+			value = "default";
+		else
+			value = "date_reverse";
+
+		order_by.attr('value', value);
+
+		viewCurrentFeed();
 
 	} catch (e) {
 		exception_error("reverseHeadlineOrder", e);
 	}
 }
 
-function scheduleFeedUpdate(id, is_cat) {
-	try {
-		if (!id) {
-			id = getActiveFeedId();
-			is_cat = activeFeedIsCat();
-		}
-
-		if (!id) {
-			alert(__("Please select some feed first."));
-			return;
-		}
-
-		var query = "?op=rpc&method=scheduleFeedUpdate&id=" +
-			param_escape(id) +
-			"&is_cat=" + param_escape(is_cat);
-
-		console.log(query);
-
-		new Ajax.Request("backend.php", {
-			parameters: query,
-			onComplete: function(transport) {
-				handle_rpc_json(transport);
-
-				var reply = JSON.parse(transport.responseText);
-				var message = reply['message'];
-
-				if (message) {
-					notify_info(message);
-					return;
-				}
-
-			} });
-
-
-	} catch (e) {
-		exception_error("scheduleFeedUpdate", e);
-	}
-}
-
-function newVersionDlg() {
-	try {
-		var query = "backend.php?op=dlg&method=newVersion";
-
-		if (dijit.byId("newVersionDlg"))
-			dijit.byId("newVersionDlg").destroyRecursive();
-
-		dialog = new dijit.Dialog({
-			id: "newVersionDlg",
-			title: __("New version available!"),
-			style: "width: 600px",
-			href: query,
-		});
-
-		dialog.show();
-
-	} catch (e) {
-		exception_error("newVersionDlg", e);
-	}
-}
-
 function handle_rpc_json(transport, scheduled_call) {
 	try {
 		var reply = JSON.parse(transport.responseText);
+
+		var netalert_dijit = dijit.byId("net-alert");
+		var netalert = false;
+
+		if (netalert_dijit)
+			netalert = netalert_dijit.domNode;
 
 		if (reply) {
 
@@ -1127,7 +1015,7 @@ function handle_rpc_json(transport, scheduled_call) {
 				if (message == "UPDATE_COUNTERS") {
 					console.log("need to refresh counters...");
 					setInitParam("last_article_id", -1);
-					_force_scheduled_update = true;
+					request_counters(true);
 				}
 			}
 
@@ -1136,19 +1024,26 @@ function handle_rpc_json(transport, scheduled_call) {
 			if (counters)
 				parse_counters(counters, scheduled_call);
 
-			var runtime_info = reply['runtime-info'];;
+			var runtime_info = reply['runtime-info'];
 
 			if (runtime_info)
 				parse_runtime_info(runtime_info);
 
-			hideOrShowFeeds(getInitParam("hide_read_feeds") == 1);
+			if (netalert) Element.hide(netalert);
 
 		} else {
-			notify_error("Error communicating with server.");
+			if (netalert)
+				Element.show(netalert);
+			else
+				notify_error("Communication problem with server.");
 		}
 
 	} catch (e) {
-		notify_error("Error communicating with server.");
+		if (netalert)
+			Element.show(netalert);
+		else
+			notify_error("Communication problem with server.");
+
 		console.log(e);
 		//exception_error("handle_rpc_json", e, transport);
 	}
@@ -1156,3 +1051,92 @@ function handle_rpc_json(transport, scheduled_call) {
 	return true;
 }
 
+function switchPanelMode(wide) {
+	try {
+		if (isCdmMode()) return;
+
+		article_id = getActiveArticleId();
+
+		if (wide) {
+			dijit.byId("headlines-wrap-inner").attr("design", 'sidebar');
+			dijit.byId("content-insert").attr("region", "trailing");
+
+	  		dijit.byId("content-insert").domNode.setStyle({width: '50%',
+				height: 'auto',
+				borderTopWidth: '0px' });
+
+			if (parseInt(getCookie("ttrss_ci_width")) > 0) {
+				dijit.byId("content-insert").domNode.setStyle(
+					{width: getCookie("ttrss_ci_width") + "px" });
+			}
+
+			$("headlines-frame").setStyle({ borderBottomWidth: '0px' });
+			$("headlines-frame").addClassName("wide");
+
+		} else {
+
+			dijit.byId("content-insert").attr("region", "bottom");
+
+	  		dijit.byId("content-insert").domNode.setStyle({width: 'auto',
+				height: '50%',
+				borderTopWidth: '0px'});
+
+			if (parseInt(getCookie("ttrss_ci_height")) > 0) {
+				dijit.byId("content-insert").domNode.setStyle(
+					{height: getCookie("ttrss_ci_height") + "px" });
+			}
+
+			$("headlines-frame").setStyle({ borderBottomWidth: '1px' });
+			$("headlines-frame").removeClassName("wide");
+
+		}
+
+		closeArticlePanel();
+
+		if (article_id) view(article_id);
+
+		new Ajax.Request("backend.php", {
+			parameters: "op=rpc&method=setpanelmode&wide=" + (wide ? 1 : 0),
+			onComplete: function(transport) {
+				console.log(transport.responseText);
+			} });
+
+
+	} catch (e) {
+		exception_error("switchPanelMode", e);
+	}
+}
+
+function update_random_feed() {
+	try {
+		console.log("in update_random_feed");
+
+		new Ajax.Request("backend.php", {
+			parameters: "op=rpc&method=updateRandomFeed",
+			onComplete: function(transport) {
+				handle_rpc_json(transport, true);
+				window.setTimeout("update_random_feed()", 30*1000);
+			} });
+
+	} catch (e) {
+		exception_error("update_random_feed", e);
+	}
+}
+
+function hash_get(key) {
+	try {
+		kv = window.location.hash.substring(1).toQueryParams();
+		return kv[key];
+	} catch (e) {
+		exception_error("hash_get", e);
+	}
+}
+function hash_set(key, value) {
+	try {
+		kv = window.location.hash.substring(1).toQueryParams();
+		kv[key] = value;
+		window.location.hash = $H(kv).toQueryString();
+	} catch (e) {
+		exception_error("hash_set", e);
+	}
+}

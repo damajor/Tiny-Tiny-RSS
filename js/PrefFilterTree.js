@@ -1,6 +1,22 @@
 dojo.provide("fox.PrefFilterTree");
 
 dojo.require("lib.CheckBoxTree");
+dojo.require("dojo.data.ItemFileWriteStore");
+
+dojo.declare("fox.PrefFilterStore", dojo.data.ItemFileWriteStore, {
+
+	_saveEverything: function(saveCompleteCallback, saveFailedCallback,
+								newFileContentString) {
+
+		dojo.xhrPost({
+			url: "backend.php",
+			content: {op: "pref-filters", method: "savefilterorder",
+				payload: newFileContentString},
+			error: saveFailedCallback,
+			load: saveCompleteCallback});
+	},
+
+});
 
 dojo.declare("fox.PrefFilterTree", lib.CheckBoxTree, {
 	_createTreeNode: function(args) {
@@ -8,12 +24,28 @@ dojo.declare("fox.PrefFilterTree", lib.CheckBoxTree, {
 
 		var enabled = this.model.store.getValue(args.item, 'enabled');
 		var param = this.model.store.getValue(args.item, 'param');
+		var rules = this.model.store.getValue(args.item, 'rules');
 
 		if (param) {
 			param = dojo.doc.createElement('span');
 			param.className = (enabled != false) ? 'labelParam' : 'labelParam Disabled';
 			param.innerHTML = args.item.param[0];
-			dojo.place(param, tnode.labelNode, 'after');
+			dojo.place(param, tnode.rowNode, 'first');
+		}
+
+		if (rules) {
+			param = dojo.doc.createElement('span');
+			param.className = 'filterRules';
+			param.innerHTML = rules;
+			dojo.place(param, tnode.rowNode, 'next');
+		}
+
+		if (this.model.store.getValue(args.item, 'id') != 'root') {
+			var img = dojo.doc.createElement('img');
+			img.src ='images/filter.png';
+			img.className = 'markedPic';
+			tnode._filterIconNode = img;
+			dojo.place(tnode._filterIconNode, tnode.labelNode, 'before');
 		}
 
 		return tnode;
@@ -47,6 +79,18 @@ dojo.declare("fox.PrefFilterTree", lib.CheckBoxTree, {
 	getRowClass: function (item, opened) {
 		return (!item.error || item.error == '') ? "dijitTreeRow" :
 			"dijitTreeRow Error";
+	},
+	checkItemAcceptance: function(target, source, position) {
+		var item = dijit.getEnclosingWidget(target).item;
+
+		// disable copying items
+		source.copyState = function() { return false; };
+
+		return position != 'over';
+	},
+	onDndDrop: function() {
+		this.inherited(arguments);
+		this.tree.model.store.save();
 	},
 });
 

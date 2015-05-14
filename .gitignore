@@ -1,3 +1,4 @@
+/messages.mo
 *~
 *.DS_Store
 #*
@@ -7,5 +8,7 @@ feed-icons/*
 cache/*/*
 lock/*
 tags
+plugins/fever
 cache/htmlpurifier/*/*ser
 lib/htmlpurifier/library/HTMLPurifier/DefinitionCache/Serializer/*/*ser
+web.config
